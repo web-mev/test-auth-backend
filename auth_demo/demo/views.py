@@ -1,3 +1,5 @@
+import requests
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import permissions as framework_permissions
@@ -24,7 +26,33 @@ class AuthLinkView(APIView):
 class RemoteAuthTokenView(APIView):
     def post(self, request, *args, **kwargs):
         # get the code and exchange for a token
-        return Response({'url': 'something'})
+        url = 'https://oauth2.googleapis.com/token'
+        data = request.data
+        code = data['code']
+        client_secret = settings.CLIENT_SECRET
+        client_id = settings.CLIENT_ID
+        redirect_uri = settings.REDIRECT_URI
+        grant_type = 'authorization_code'
+        post_data = {
+            'client_id' : client_id,
+            'client_secret' : client_secret,
+            'redirect_uri': redirect_uri,
+            'grant_type' : grant_type,
+            'code' : code
+        }
+        r = requests.post(url, data=post_data)
+        if r.status_code == 200:
+            j = r.json()
+            access_token = j['access_token']
+            print('have token:', access_token)
+            info_url = 'https://www.googleapis.com/oauth2/v3/userinfo'
+            headers={
+                'Authorization': 'Bearer %s' % access_token,
+            }
+            info_get = requests.get(info_url, headers=headers)
+            j = info_get.json()
+            print(j)
+            return Response(j)
 
 class InfoView(APIView):
     def get(self, request, *args, **kwargs):

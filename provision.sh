@@ -31,6 +31,8 @@ export LANG=C.UTF-8
 
 # Create the dir from which nginx will eventually serve static files
 mkdir -p /www
+mkdir -p /var/log/demo
+chown vagrant:vagrant /var/log/demo
 
 # # Apply database migrations, collect the static files to server, and create
 # # a superuser based on the environment variables passed to the container.
