@@ -5,6 +5,11 @@ from rest_framework.response import Response
 from rest_framework import permissions as framework_permissions
 
 from django.conf import settings
+from django.http import HttpResponse
+from django.shortcuts import render
+
+def basic(request):
+    return render(request, 'demo/something.html', {})
 
 class AuthLinkView(APIView):
     def get(self, request, *args, **kwargs):
@@ -53,6 +58,13 @@ class RemoteAuthTokenView(APIView):
             j = info_get.json()
             print(j)
             return Response(j)
+
+class GoogleOauth2View(APIView):
+    def post(self, request, *args, **kwargs):
+        code = data['code']
+        client_secret = settings.CLIENT_SECRET
+        client_id = settings.CLIENT_ID
+        redirect_uri = settings.REDIRECT_URI
 
 class InfoView(APIView):
     def get(self, request, *args, **kwargs):
