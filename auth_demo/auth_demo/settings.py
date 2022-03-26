@@ -82,7 +82,8 @@ WSGI_APPLICATION = 'auth_demo.wsgi.application'
 
 
 AUTHENTICATION_BACKENDS = (
-    'social_core.backends.google.GoogleOAuth2',
+    'demo.backends.CustomGoogleOAuth2',
+    #'social_core.backends.google.GoogleOAuth2',
     'django.contrib.auth.backends.ModelBackend',
 )
 
@@ -145,5 +146,5 @@ REST_FRAMEWORK = {
     )
 }
 
-SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.environ['CLIENT_ID']
-SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.environ['CLIENT_SECRET']
+SOCIAL_AUTH_CUSTOM_GOOGLE_OAUTH2_KEY = os.environ['CLIENT_ID']
+SOCIAL_AUTH_CUSTOM_GOOGLE_OAUTH2_SECRET = os.environ['CLIENT_SECRET']

@@ -11,6 +11,8 @@ set -o allexport
 source /vagrant/$1
 set +o allexport
 
+cp /vagrant/$1 /vagrant/.env
+
 apt-get update
 
 apt-get install -y build-essential \
