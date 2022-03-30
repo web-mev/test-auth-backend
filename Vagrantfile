@@ -6,7 +6,7 @@ Vagrant.configure("2") do |config|
 
   config.vm.hostname = "django-auth-backend"
 
-  config.vm.network "forwarded_port", guest: 8005, host: 8005
+  config.vm.network "forwarded_port", guest: 8005, host: 80
 
   config.vm.provider "virtualbox" do |vb|
     vb.memory = 4092

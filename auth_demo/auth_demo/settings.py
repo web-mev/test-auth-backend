@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/4.0/ref/settings/
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+from datetime import timedelta
 
 load_dotenv()
 
@@ -31,8 +32,10 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
+FRONTEND_DOMAIN = 'http://localhost:4200'
+
 CORS_ALLOWED_ORIGINS = [
-    'http://localhost:4200'
+    FRONTEND_DOMAIN
 ]
 # Application definition
 
@@ -46,6 +49,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'social_django',
+    'rest_social_auth',
     'demo'
 ]
 
@@ -78,12 +82,21 @@ TEMPLATES = [
     },
 ]
 
+# A custom user model which treats the email as the username
+AUTH_USER_MODEL = 'demo.CustomUser'
+
+# for the simple JWT framework. We use a UUID to identify a user
+# (instead of an integer pk)
+SIMPLE_JWT = {
+    'USER_ID_FIELD': 'user_uuid',
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30)
+}
+
 WSGI_APPLICATION = 'auth_demo.wsgi.application'
 
 
 AUTHENTICATION_BACKENDS = (
-    'demo.backends.CustomGoogleOAuth2',
-    #'social_core.backends.google.GoogleOAuth2',
+    'social_core.backends.google.GoogleOAuth2',
     'django.contrib.auth.backends.ModelBackend',
 )
 
@@ -146,5 +159,28 @@ REST_FRAMEWORK = {
     )
 }
 
-SOCIAL_AUTH_CUSTOM_GOOGLE_OAUTH2_KEY = os.environ['CLIENT_ID']
-SOCIAL_AUTH_CUSTOM_GOOGLE_OAUTH2_SECRET = os.environ['CLIENT_SECRET']
+SOCIAL_AUTH_GOOGLE_OAUTH2_PIPELINE = (
+    'social_core.pipeline.social_auth.social_details', 
+    'social_core.pipeline.social_auth.social_uid', 
+    'social_core.pipeline.social_auth.auth_allowed', 
+    'social_core.pipeline.social_auth.social_user', 
+    'social_core.pipeline.user.get_username', 
+    'social_core.pipeline.user.create_user', 
+    'social_core.pipeline.social_auth.associate_user', 
+    'social_core.pipeline.social_auth.load_extra_data', 
+    'social_core.pipeline.user.user_details',
+    'demo.pipeline_components.save_picture'
+)
+
+SOCIAL_AUTH_STRATEGY = 'demo.strategy.XYZStrategy'
+
+# sets the proper redirect URL (e.g. localhost:4200/redirect/)
+# which is the frontend client
+REST_SOCIAL_OAUTH_REDIRECT_URI = '/redirect/'
+
+# This is the default, but we are being explicit here that the redirect
+# URL should correspond to the frontend.
+REST_SOCIAL_DOMAIN_FROM_ORIGIN = True
+
+SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.environ['CLIENT_ID']
+SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.environ['CLIENT_SECRET']

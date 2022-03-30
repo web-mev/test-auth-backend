@@ -11,21 +11,23 @@ from django.shortcuts import render
 from social_django.utils import psa
 from social_core.actions import do_auth
 
-def show_link(request):
-    return render(request, 'demo/something.html', {})
-
 @psa()
-def other(request, backend):
+def construct_auth_url(request, backend):
+    # Note that this doesn't necessarily work with ANY backend.
+    # the usual response from this function (e.g. with a google-oauth2
+    # backend) is a redirect. Here, we expect that the backend will
+    # return a JSON response.
     return do_auth(request.backend)
 
 class InfoView(APIView):
-    def get(self, request, *args, **kwargs):
-        # Use the authToken to get info about the user
-        return Response({'url': 'something'})
-
-class ProtectedView(APIView):
     permission_classes = [
         framework_permissions.IsAuthenticated 
     ]
     def get(self, request, *args, **kwargs):
-        return Response({'info': 'something protected'})
+        user = request.user
+        return Response(
+            {
+                'email': user.email,
+                'pic_url': user.profile_pic_url
+            }
+        )
