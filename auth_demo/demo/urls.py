@@ -18,6 +18,9 @@ urlpatterns = [
     path('auth/<str:backend>/', views.construct_auth_url),
 
     # This takes a response code and returns a JWT pair
-    path('login/', include('rest_social_auth.urls_jwt_pair'))
+    path('login/', include('rest_social_auth.urls_jwt_pair')),
+
+    # For globus 
+    path('globus/get-auth-link/', views.GlobusAuthView.as_view())
 ]
 

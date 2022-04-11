@@ -184,3 +184,12 @@ REST_SOCIAL_DOMAIN_FROM_ORIGIN = True
 
 SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.environ['GOOGLE_CLIENT_ID']
 SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.environ['GOOGLE_CLIENT_SECRET']
+
+GLOBUS_CLIENT_ID = os.environ['GLOBUS_CLIENT_ID']
+GLOBUS_CLIENT_SECRET = os.environ['GLOBUS_CLIENT_SECRET']
+GLOBUS_SCOPES = (
+    "openid",
+    "profile",
+    "email",
+    "urn:globus:auth:scope:transfer.api.globus.org:all",
+)
