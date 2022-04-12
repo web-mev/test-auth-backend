@@ -4,6 +4,7 @@ from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import PermissionsMixin
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
+from django.contrib.auth import get_user_model
 
 '''
 The CustomUser model below and its manager are essentially copies of the basic django.contrib.auth
@@ -92,3 +93,12 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     def email_user(self, subject, message, from_email=None, **kwargs):
         """Send an email to this user."""
         pass
+
+class GlobusTokens(models.Model):
+    user = models.ForeignKey(
+        get_user_model(),
+        related_name = 'globus_tokens',
+        on_delete = models.CASCADE
+    )
+    # since sqLite doesn't support JSON, just store as a string
+    token_text = models.CharField(max_length=2500)
