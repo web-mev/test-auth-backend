@@ -194,9 +194,11 @@ GLOBUS_BROWSER_URI = 'https://app.globus.org/file-manager?action={URI}&method={c
 )
 GLOBUS_CLIENT_ID = os.environ['GLOBUS_CLIENT_ID']
 GLOBUS_CLIENT_SECRET = os.environ['GLOBUS_CLIENT_SECRET']
+GLOBUS_TRANSFER_SCOPE = 'urn:globus:auth:scope:transfer.api.globus.org:all'
 GLOBUS_SCOPES = (
     "openid",
     "profile",
     "email",
-    "urn:globus:auth:scope:transfer.api.globus.org:all",
+    GLOBUS_TRANSFER_SCOPE,
 )
+GLOBUS_ENDPOINT_ID=os.environ['GLOBUS_ENDPOINT_ID']

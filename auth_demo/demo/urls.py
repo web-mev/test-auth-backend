@@ -21,6 +21,8 @@ urlpatterns = [
     path('login/', include('rest_social_auth.urls_jwt_pair')),
 
     # For globus 
-    path('globus/initiate/', views.GlobusView.as_view())
+    path('globus/initiate/', views.GlobusView.as_view()),
+    path('globus/transfer/', views.GlobusTransfer.as_view())
+
 ]
 
