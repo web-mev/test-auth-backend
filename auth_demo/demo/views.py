@@ -69,28 +69,72 @@ class GlobusTransfer(APIView):
         #     }
         # }
         params = request.data['params']
+
+        # TODO: implement a sane check/try-catch here
+        gt = GlobusTokens.objects.filter(user = request.user)
+        if len(gt) != 1:
+            raise Exception('failed to find a single token for this user!')
+        else:
+            gt = gt[0]
+
+        # parse out the tokens from the json-format string
+        tokens = json.loads(gt.token_text)
+        auth_tokens = tokens['auth.globus.org']
+        transfer_tokens = tokens['transfer.api.globus.org']
+
+        # Establish our client
         client = globus_sdk.ConfidentialAppAuthClient(
             settings.GLOBUS_CLIENT_ID,
             settings.GLOBUS_CLIENT_SECRET
         )
+
+        # create an authorizer for the user's tokens which grant
+        # us the ability to check their user info. Could also do
+        # this somewhere else and cache in the db
+        auth_rt_authorizer = globus_sdk.RefreshTokenAuthorizer(
+            auth_tokens['refresh_token'], 
+            client,
+            access_token=auth_tokens['access_token'],
+            expires_at = auth_tokens['expires_at_seconds']
+        )
+        ac = globus_sdk.AuthClient(authorizer=auth_rt_authorizer)
+        user_info = ac.oauth2_userinfo()
+        user_info = json.loads(user_info.text)
+        user_uuid = user_info['sub']
+        print('USER UUID: ', user_uuid)
+
+        # create another authorizer using the tokens for the transfer API
+        transfer_rt_authorizer = globus_sdk.RefreshTokenAuthorizer(
+            transfer_tokens['refresh_token'], 
+            client,
+            access_token=transfer_tokens['access_token'],
+            expires_at = transfer_tokens['expires_at_seconds']
+        )
+        user_transfer_client = globus_sdk.TransferClient(authorizer=transfer_rt_authorizer)
+
+        # Create another transfer client which will allow us to add an ACL. Note that THIS TransferClient
+        # is based on our client credentials, not on the current client who is attempting the transfer 
         cc_authorizer = globus_sdk.ClientCredentialsAuthorizer(client, settings.GLOBUS_TRANSFER_SCOPE)
-        transfer_client = globus_sdk.TransferClient(authorizer=cc_authorizer)
+        my_transfer_client = globus_sdk.TransferClient(authorizer=cc_authorizer)
         tmp_folder = '/tmp-{x}/'.format(x=uuid.uuid4())
 
-        # Note that this adding of ACL was not necessary. The transfer still succeeded 
-        # with these lines commented out:
+        # Create the rule and add it
         rule_data = {
             "DATA_TYPE": "access",
             "principal_type": "identity",
-            "principal": settings.GLOBUS_CLIENT_ID,
+            "principal": user_uuid,
             "path": tmp_folder,
             "permissions": "rw", 
         }
-        result = transfer_client.add_endpoint_acl_rule(settings.GLOBUS_ENDPOINT_ID, rule_data)
+        result = my_transfer_client.add_endpoint_acl_rule(settings.GLOBUS_ENDPOINT_ID, rule_data)
+
+        # TODO: can save this to later remove the ACL
         rule_id = result['access_id']
+
+        # Now onto the business of initiating the transfer
         source_endpoint_id = params['endpoint_id']
         destination_endpoint_id = settings.GLOBUS_ENDPOINT_ID
-        transfer_data = globus_sdk.TransferData(transfer_client=transfer_client,
+        transfer_data = globus_sdk.TransferData(transfer_client=user_transfer_client,
                             source_endpoint=source_endpoint_id,
                             destination_endpoint=destination_endpoint_id,
                             label=params['label'])
@@ -112,9 +156,10 @@ class GlobusTransfer(APIView):
                 source_path = source_path,
                 destination_path = destination_path
             )
-        transfer_client.endpoint_autoactivate(source_endpoint_id)
-        transfer_client.endpoint_autoactivate(destination_endpoint_id)
-        task_id = transfer_client.submit_transfer(transfer_data)['task_id']
+        user_transfer_client.endpoint_autoactivate(source_endpoint_id)
+        user_transfer_client.endpoint_autoactivate(destination_endpoint_id)
+        task_id = user_transfer_client.submit_transfer(transfer_data)['task_id']
+        print(task_id)
         return Response({'transfer_id': task_id})
         
 class GlobusView(APIView):
