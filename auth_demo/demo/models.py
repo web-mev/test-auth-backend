@@ -102,3 +102,12 @@ class GlobusTokens(models.Model):
     )
     # since sqLite doesn't support JSON, just store as a string
     token_text = models.CharField(max_length=2500)
+
+class Resource(models.Model):
+    owner = models.ForeignKey(
+        get_user_model(),
+        related_name = 'resources',
+        on_delete = models.CASCADE
+    )
+    path = models.CharField(max_length=100)
+    name = models.CharField(max_length=25)

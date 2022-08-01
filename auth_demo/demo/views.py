@@ -20,10 +20,59 @@ from social_core.actions import do_auth
 
 import globus_sdk
 
-from .models import GlobusTokens
+from .models import GlobusTokens, Resource
 
 REAUTHENTICATION_WINDOW_IN_MINUTES = 60
 
+
+def create_transfer_client(user):
+
+    # TODO: implement a sane check/try-catch here
+    gt = GlobusTokens.objects.filter(user = user)
+    if len(gt) != 1:
+        raise Exception('failed to find a single token for this user!')
+    else:
+        gt = gt[0]
+
+    # parse out the tokens from the json-format string
+    tokens = json.loads(gt.token_text)
+    auth_tokens = tokens['auth.globus.org']
+    transfer_tokens = tokens['transfer.api.globus.org']
+
+    # Establish our client
+    client = globus_sdk.ConfidentialAppAuthClient(
+        settings.GLOBUS_CLIENT_ID,
+        settings.GLOBUS_CLIENT_SECRET
+    )
+
+    # create an authorizer for the user's tokens which grant
+    # us the ability to check their user info. Could also do
+    # this somewhere else and cache in the db
+    auth_rt_authorizer = globus_sdk.RefreshTokenAuthorizer(
+        auth_tokens['refresh_token'], 
+        client,
+        access_token=auth_tokens['access_token'],
+        expires_at = auth_tokens['expires_at_seconds']
+    )
+    ac = globus_sdk.AuthClient(authorizer=auth_rt_authorizer)
+    user_info = ac.oauth2_userinfo()
+    user_info = json.loads(user_info.text)
+    user_uuid = user_info['sub']
+    print('USER UUID: ', user_uuid)
+
+    # create another authorizer using the tokens for the transfer API
+    transfer_rt_authorizer = globus_sdk.RefreshTokenAuthorizer(
+        transfer_tokens['refresh_token'], 
+        client,
+        access_token=transfer_tokens['access_token'],
+        expires_at = transfer_tokens['expires_at_seconds']
+    )
+    user_transfer_client = globus_sdk.TransferClient(authorizer=transfer_rt_authorizer)
+
+    # Create another transfer client which will allow us to add an ACL. Note that THIS TransferClient
+    # is based on our client credentials, not on the current client who is attempting the transfer 
+    cc_authorizer = globus_sdk.ClientCredentialsAuthorizer(client, settings.GLOBUS_TRANSFER_SCOPE)
+    return globus_sdk.TransferClient(authorizer=cc_authorizer), user_uuid
 
 def random_string(length=12):
     '''
@@ -52,6 +101,111 @@ def construct_auth_url(request, backend):
     # return a JSON response.
     return do_auth(request.backend)
 
+class ListFilesView(APIView):
+
+    permission_classes = [
+        framework_permissions.IsAuthenticated 
+    ]
+
+    def get(self, request, *args, **kwargs):
+        r = Resource.objects.filter(owner = request.user)
+        response = []
+        for rr in r:
+            x = {
+                'name': rr.name,
+                'path': rr.path,
+                'pk': str(rr.pk)
+            }
+            response.append(x)
+        return Response(response)
+
+
+class DownloadFilesView(APIView):
+
+    permission_classes = [
+        framework_permissions.IsAuthenticated 
+    ]    
+    
+    def post(self, request, *args, **kwargs):
+        print('data=', request.data)
+        pk = request.data['pk']
+        r = Resource.objects.get(pk=pk)
+        print(r)
+
+        # copy the file to some other location.
+        # For Globus to 'see' it, needs to be in the same folder
+        # accessible by the collection
+        data_location = os.path.join(
+            settings.S3_BUCKET,
+            settings.S3_BUCKET_ROOT_DIR,
+            r.path
+        )
+        tmp_folder = '/tmp-{x}/'.format(x=uuid.uuid4())
+        tmp_data_location = os.path.join(
+            settings.S3_BUCKET,
+            settings.S3_BUCKET_ROOT_DIR,
+            tmp_folder,
+            os.path.basename(r.path)
+        )
+        # boto copy...
+
+
+        my_transfer_client, user_uuid = create_transer_client(request.user)
+
+        # Create the rule and add it
+        rule_data = {
+            "DATA_TYPE": "access",
+            "principal_type": "identity",
+            "principal": user_uuid,
+            "path": tmp_data_location,
+            "permissions": "rw", 
+        }
+        print('Rule data:\n', rule_data)
+        result = my_transfer_client.add_endpoint_acl_rule(settings.GLOBUS_ENDPOINT_ID, rule_data)
+        print('Added ACL. Result is:\n', result)
+        # TODO: can save this to later remove the ACL
+        rule_id = result['access_id']
+
+        # Now onto the business of initiating the transfer
+        # TODO: get the endpoint based on where the user wants to put their files.
+        destination_endpoint_id = params['endpoint_id']
+        source_endpoint_id = settings.GLOBUS_ENDPOINT_ID
+        print('Source endpoint:', source_endpoint_id)
+        print('Destination endpoint:', destination_endpoint_id)
+        transfer_data = globus_sdk.TransferData(transfer_client=user_transfer_client,
+                            source_endpoint=source_endpoint_id,
+                            destination_endpoint=destination_endpoint_id,
+                            label=params['label'])
+
+        source_path = os.path.join(
+            tmp_folder,
+            os.path.basename(r.path) 
+        )
+        # TODO: determine where the file will go based on user input
+        destination_path = ...
+        print('Add: {s} --> {d}'.format(
+            s = source_path,
+            d = destination_path
+        ))
+        transfer_data.add_item(
+            source_path = source_path,
+            destination_path = destination_path
+        )
+        user_transfer_client.endpoint_autoactivate(source_endpoint_id)
+        user_transfer_client.endpoint_autoactivate(destination_endpoint_id)
+        try:
+            task_id = user_transfer_client.submit_transfer(transfer_data)['task_id']
+        except globus_sdk.GlobusAPIError as ex:
+            authz_params = ex.info.authorization_parameters
+            if not authz_params:
+                raise
+            print("got authz params:", authz_params)
+        print(task_id)
+        return Response({'transfer_id': task_id})
+
+
+        return Response({})
+
 class GlobusTransfer(APIView):
 
     permission_classes = [
@@ -73,52 +227,7 @@ class GlobusTransfer(APIView):
         # }
         params = request.data['params']
 
-        # TODO: implement a sane check/try-catch here
-        gt = GlobusTokens.objects.filter(user = request.user)
-        if len(gt) != 1:
-            raise Exception('failed to find a single token for this user!')
-        else:
-            gt = gt[0]
-
-        # parse out the tokens from the json-format string
-        tokens = json.loads(gt.token_text)
-        auth_tokens = tokens['auth.globus.org']
-        transfer_tokens = tokens['transfer.api.globus.org']
-
-        # Establish our client
-        client = globus_sdk.ConfidentialAppAuthClient(
-            settings.GLOBUS_CLIENT_ID,
-            settings.GLOBUS_CLIENT_SECRET
-        )
-
-        # create an authorizer for the user's tokens which grant
-        # us the ability to check their user info. Could also do
-        # this somewhere else and cache in the db
-        auth_rt_authorizer = globus_sdk.RefreshTokenAuthorizer(
-            auth_tokens['refresh_token'], 
-            client,
-            access_token=auth_tokens['access_token'],
-            expires_at = auth_tokens['expires_at_seconds']
-        )
-        ac = globus_sdk.AuthClient(authorizer=auth_rt_authorizer)
-        user_info = ac.oauth2_userinfo()
-        user_info = json.loads(user_info.text)
-        user_uuid = user_info['sub']
-        print('USER UUID: ', user_uuid)
-
-        # create another authorizer using the tokens for the transfer API
-        transfer_rt_authorizer = globus_sdk.RefreshTokenAuthorizer(
-            transfer_tokens['refresh_token'], 
-            client,
-            access_token=transfer_tokens['access_token'],
-            expires_at = transfer_tokens['expires_at_seconds']
-        )
-        user_transfer_client = globus_sdk.TransferClient(authorizer=transfer_rt_authorizer)
-
-        # Create another transfer client which will allow us to add an ACL. Note that THIS TransferClient
-        # is based on our client credentials, not on the current client who is attempting the transfer 
-        cc_authorizer = globus_sdk.ClientCredentialsAuthorizer(client, settings.GLOBUS_TRANSFER_SCOPE)
-        my_transfer_client = globus_sdk.TransferClient(authorizer=cc_authorizer)
+        my_transfer_client, user_uuid = create_transer_client(request.user)
         tmp_folder = '/tmp-{x}/'.format(x=uuid.uuid4())
 
         # Create the rule and add it
@@ -172,6 +281,11 @@ class GlobusTransfer(APIView):
                 raise
             print("got authz params:", authz_params)
         print(task_id)
+        r = Resource.objects.create(
+            path = destination_path,
+            owner = request.user,
+            name = ''
+        )
         return Response({'transfer_id': task_id})
         
 class GlobusView(APIView):
@@ -223,7 +337,7 @@ class GlobusView(APIView):
         token_data = client.oauth2_token_introspect(
             auth_tokens['access_token'], 
             include='session_info')
-        print('Updated token ddata after introspect:\n', token_data)
+        print('Token data from introspect:\n', token_data)
 
         user_id = token_data.data['sub']
         authentications_dict = token_data.data['session_info']['authentications']
@@ -238,6 +352,23 @@ class GlobusView(APIView):
             return True
         print('no auths found')
         return False
+
+    def my_introspect(self, client, rt, key):
+        token_data = client.oauth2_token_introspect(
+            rt[key]['access_token'], 
+            include='session_info')
+        print('In the "code" response block, token data (%s) from introspect:\n' % key, token_data)
+
+        user_id = token_data.data['sub']
+        authentications_dict = token_data.data['session_info']['authentications']
+        if user_id in authentications_dict:
+            print('In introspect, found auths')
+            auth_time = authentications_dict[user_id]['auth_time'] # in seconds since epoch
+            time_delta = (time.time() - auth_time)/60 + 5 # how many minutes have passed PLUS some buffer
+            if time_delta > REAUTHENTICATION_WINDOW_IN_MINUTES:
+                print('In introspect, auth was too old. Delta=', time_delta)
+            else:
+                print('In introspect, auth time was OK')
 
     def get(self, request, *args, **kwargs):
         print('hi.')
@@ -285,6 +416,15 @@ class GlobusView(APIView):
                 for t in existing_db_tokens:
                     t.delete()
             self.save_token(request.user, json_str)
+
+            ### Start temp code  #####
+            self.my_introspect(client, rt, 'auth.globus.org')
+            print('?'*200)
+            self.my_introspect(client, rt, 'transfer.api.globus.org')
+
+            ### End temp code  #####
+
+
             return Response({
                 'globus-browser-url': settings.GLOBUS_BROWSER_URI
             })
@@ -318,6 +458,7 @@ class GlobusView(APIView):
                     additional_authorize_params = {}
                     additional_authorize_params['state'] = random_string()
                     additional_authorize_params['session_required_identities'] = token_data.data['sub']
+                    additional_authorize_params['prompt'] = 'login'
                     auth_uri = client.oauth2_get_authorize_url(
                         query_params=additional_authorize_params)
                     print('return auth_uri=', auth_uri)

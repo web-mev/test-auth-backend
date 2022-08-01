@@ -14,6 +14,10 @@ urlpatterns = [
     # Returns info about a user. Protected view.
     path('info/', views.InfoView.as_view(), name='info-page'),
 
+    # Returns info about available files. Protected view.
+    path('resources/', views.ListFilesView.as_view(), name='file-page'),
+    path('resources/download/', views.DownloadFilesView.as_view(), name='download-file-page'),
+
     # This returns a url for the auth redirect
     path('auth/<str:backend>/', views.construct_auth_url),
 
