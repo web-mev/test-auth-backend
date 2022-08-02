@@ -186,10 +186,16 @@ SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.environ['GOOGLE_CLIENT_ID']
 SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.environ['GOOGLE_CLIENT_SECRET']
 
 GLOBUS_AUTH_REDIRECT_URI = 'http://localhost:4200/globus/auth-redirect/'
-GLOBUS_TRANSFER_REDIRECT_URI = 'http://localhost:4200/globus/transfer-redirect/'
+GLOBUS_TRANSFER_REDIRECT_URI = 'http://localhost:4200/globus/upload-redirect/'
 GLOBUS_TRANSFER_CALLBACK_METHOD = 'GET'
-GLOBUS_BROWSER_URI = 'https://app.globus.org/file-manager?action={URI}&method={callback_method}'.format(
+GLOBUS_BROWSER_UPLOAD_URI = 'https://app.globus.org/file-manager?action={URI}&method={callback_method}'.format(
     URI=GLOBUS_TRANSFER_REDIRECT_URI,
+    callback_method = GLOBUS_TRANSFER_CALLBACK_METHOD    
+)
+
+GLOBUS_TRANSFER_DOWNLOAD_REDIRECT_URI = 'http://localhost:4200/globus/download-redirect/'
+GLOBUS_BROWSER_DOWNLOAD_URI = 'https://app.globus.org/file-manager?action={URI}&method={callback_method}&folderlimit=1&filelimit=0'.format(
+    URI=GLOBUS_TRANSFER_DOWNLOAD_REDIRECT_URI,
     callback_method = GLOBUS_TRANSFER_CALLBACK_METHOD    
 )
 GLOBUS_CLIENT_ID = os.environ['GLOBUS_CLIENT_ID']

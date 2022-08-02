@@ -26,7 +26,8 @@ urlpatterns = [
 
     # For globus 
     path('globus/initiate/', views.GlobusView.as_view()),
-    path('globus/transfer/', views.GlobusTransfer.as_view())
+    path('globus/transfer/', views.GlobusTransfer.as_view()),
+    path('globus/download/', views.GlobusDownloadView.as_view())
 
 ]
 
