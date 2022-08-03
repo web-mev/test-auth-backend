@@ -185,19 +185,27 @@ REST_SOCIAL_DOMAIN_FROM_ORIGIN = True
 SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = os.environ['GOOGLE_CLIENT_ID']
 SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = os.environ['GOOGLE_CLIENT_SECRET']
 
+# the (frontend) URL where Globus will redirect for the OAuth2 exchange
 GLOBUS_AUTH_REDIRECT_URI = 'http://localhost:4200/globus/auth-redirect/'
-GLOBUS_TRANSFER_REDIRECT_URI = 'http://localhost:4200/globus/upload-redirect/'
-GLOBUS_TRANSFER_CALLBACK_METHOD = 'GET'
+
+# the (frontend) URL where the Globus file chooser will redirect to once
+# the files are chosen
+GLOBUS_UPLOAD_REDIRECT_URI = 'http://localhost:4200/globus/upload-redirect/'
+GLOBUS_UPLOAD_CALLBACK_METHOD = 'GET'
 GLOBUS_BROWSER_UPLOAD_URI = 'https://app.globus.org/file-manager?action={URI}&method={callback_method}'.format(
-    URI=GLOBUS_TRANSFER_REDIRECT_URI,
-    callback_method = GLOBUS_TRANSFER_CALLBACK_METHOD    
+    URI=GLOBUS_UPLOAD_REDIRECT_URI,
+    callback_method = GLOBUS_UPLOAD_CALLBACK_METHOD    
 )
 
-GLOBUS_TRANSFER_DOWNLOAD_REDIRECT_URI = 'http://localhost:4200/globus/download-redirect/'
+# the (frontend) URL where the Globus file chooser will redirect to once
+# the download destination is chosen.
+GLOBUS_DOWNLOAD_REDIRECT_URI = 'http://localhost:4200/globus/download-redirect/'
+GLOBUS_DOWNLOAD_CALLBACK_METHOD = 'GET'
 GLOBUS_BROWSER_DOWNLOAD_URI = 'https://app.globus.org/file-manager?action={URI}&method={callback_method}&folderlimit=1&filelimit=0'.format(
-    URI=GLOBUS_TRANSFER_DOWNLOAD_REDIRECT_URI,
-    callback_method = GLOBUS_TRANSFER_CALLBACK_METHOD    
+    URI=GLOBUS_DOWNLOAD_REDIRECT_URI,
+    callback_method = GLOBUS_DOWNLOAD_CALLBACK_METHOD    
 )
+
 GLOBUS_CLIENT_ID = os.environ['GLOBUS_CLIENT_ID']
 GLOBUS_CLIENT_SECRET = os.environ['GLOBUS_CLIENT_SECRET']
 GLOBUS_TRANSFER_SCOPE = 'urn:globus:auth:scope:transfer.api.globus.org:all'
@@ -208,6 +216,7 @@ GLOBUS_SCOPES = (
     GLOBUS_TRANSFER_SCOPE,
 )
 GLOBUS_ENDPOINT_ID=os.environ['GLOBUS_ENDPOINT_ID']
+GLOBUS_REAUTHENTICATION_WINDOW_IN_MINUTES = 60
 
 S3_BUCKET = os.environ['S3_BUCKET']
 S3_BUCKET_ROOT_DIR = os.environ['S3_BUCKET_ROOT_DIR']

@@ -1,2 +1,2 @@
-NonexistentGlobusTokenException(Exception):
+class NonexistentGlobusTokenException(Exception):
     pass

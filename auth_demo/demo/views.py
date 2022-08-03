@@ -24,9 +24,17 @@ import boto3
 
 from .models import GlobusTokens, Resource
 from .utils import random_string, \
-    get_globus_client
+    get_globus_client, \
+    create_or_update_token, \
+    get_globus_token_from_db, \
+    get_globus_uuid, \
+    check_globus_tokens, \
+    create_user_transfer_client, \
+    create_application_transfer_client
 
-REAUTHENTICATION_WINDOW_IN_MINUTES = 60
+SESSION_MESSAGE = ('Since this is a high-assurance Globus collection, we'
+    ' require a recent authentication. Please sign-in again.'
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,39 +70,35 @@ class ListFilesView(APIView):
         return Response(response)
 
 
-class GlobusInitView(APIView):
-    '''
-    A common view for intitiating either up or downloads via Globus
-    '''
+# class GlobusInitView(APIView):
+#     '''
+#     A common view for intitiating either up or downloads via Globus
+#     '''
 
-    permission_classes = [
-        framework_permissions.IsAuthenticated 
-    ]    
+#     permission_classes = [
+#         framework_permissions.IsAuthenticated 
+#     ]    
     
-    def get(self, request, *args, **kwargs):
+#     def get(self, request, *args, **kwargs):
 
-        transfer_direction = request.query_params.get('direction')
+#         transfer_direction = request.query_params.get('direction')
 
-        
+# class DownloadFilesView(APIView):
 
-
-
-class DownloadFilesView(APIView):
-
-    permission_classes = [
-        framework_permissions.IsAuthenticated 
-    ]    
+#     permission_classes = [
+#         framework_permissions.IsAuthenticated 
+#     ]    
     
-    def post(self, request, *args, **kwargs):
-        print('data=', request.data)
-        pk = request.data['pk']
-        r = Resource.objects.get(pk=pk)
-        print(r)
+#     def post(self, request, *args, **kwargs):
+#         print('data=', request.data)
+#         pk = request.data['pk']
+#         r = Resource.objects.get(pk=pk)
+#         print(r)
 
-        url = settings.GLOBUS_BROWSER_DOWNLOAD_URI + '&ep=' + pk
-        return Response(
-            {'globus-browser-url': url}
-        )
+#         url = settings.GLOBUS_BROWSER_DOWNLOAD_URI + '&ep=' + pk
+#         return Response(
+#             {'globus-browser-url': url}
+#         )
 
 class GlobusDownloadView(APIView):
 
@@ -186,7 +190,7 @@ class GlobusDownloadView(APIView):
         # print(task_id)
         # return Response({'transfer_id': task_id})
 
-class GlobusTransfer(APIView):
+class GlobusUploadView(APIView):
 
     permission_classes = [
         framework_permissions.IsAuthenticated 
@@ -207,7 +211,8 @@ class GlobusTransfer(APIView):
         # }
         params = request.data['params']
 
-        my_transfer_client, user_uuid = create_transfer_client(request.user)
+        app_transfer_client = create_application_transfer_client()
+        user_uuid = get_globus_uuid(request.user)
         tmp_folder = '/tmp-{x}/'.format(x=uuid.uuid4())
 
         # Create the rule and add it
@@ -218,21 +223,24 @@ class GlobusTransfer(APIView):
             "path": tmp_folder,
             "permissions": "rw", 
         }
-        print('Rule data:\n', rule_data)
-        result = my_transfer_client.add_endpoint_acl_rule(settings.GLOBUS_ENDPOINT_ID, rule_data)
-        print('Added ACL. Result is:\n', result)
+        logger.info('Rule data:\n{data}'.format(data=rule_data))
+        result = app_transfer_client.add_endpoint_acl_rule(settings.GLOBUS_ENDPOINT_ID, rule_data)
+        logger.info('Added ACL. Result is:\n{r}'.format(r=result))
+
         # TODO: can save this to later remove the ACL
         rule_id = result['access_id']
 
         # Now onto the business of initiating the transfer
         source_endpoint_id = params['endpoint_id']
         destination_endpoint_id = settings.GLOBUS_ENDPOINT_ID
-        print('Source endpoint:', source_endpoint_id)
-        print('Destination endpoint:', destination_endpoint_id)
-        transfer_data = globus_sdk.TransferData(transfer_client=my_transfer_client,
-                            source_endpoint=source_endpoint_id,
-                            destination_endpoint=destination_endpoint_id,
-                            label=params['label'])
+        logger.info('Source endpoint: {e}'.format(e=source_endpoint_id))
+        logger.info('Destination endpoint: {e}'.format(e=destination_endpoint_id))
+        transfer_data = globus_sdk.TransferData(
+            transfer_client=app_transfer_client,
+            source_endpoint=source_endpoint_id,
+            destination_endpoint=destination_endpoint_id,
+            label=params['label'])
+
         file_keys = [x for x in params.keys() if re.fullmatch('file\[\d+\]', x)]
         for k in file_keys:
             source_path = os.path.join(
@@ -243,7 +251,7 @@ class GlobusTransfer(APIView):
                 tmp_folder,
                 params[k]
             )
-            print('Add: {s} --> {d}'.format(
+            logger.info('Add: {s} --> {d}'.format(
                 s = source_path,
                 d = destination_path
             ))
@@ -251,6 +259,12 @@ class GlobusTransfer(APIView):
                 source_path = source_path,
                 destination_path = destination_path
             )
+            # r = Resource.objects.create(
+            #     path = destination_path,
+            #     owner = request.user,
+            #     name = os.path.basename(source_path)
+            # )
+        user_transfer_client = create_user_transfer_client(request.user)
         user_transfer_client.endpoint_autoactivate(source_endpoint_id)
         user_transfer_client.endpoint_autoactivate(destination_endpoint_id)
         try:
@@ -259,36 +273,33 @@ class GlobusTransfer(APIView):
             authz_params = ex.info.authorization_parameters
             if not authz_params:
                 raise
-            print("got authz params:", authz_params)
-        print(task_id)
-        r = Resource.objects.create(
-            path = destination_path,
-            owner = request.user,
-            name = ''
-        )
+            logger.info("got authz params:", authz_params)
+
         return Response({'transfer_id': task_id})
         
-class GlobusInitDownloadView(APIView):
+# class GlobusInitDownloadView(APIView):
 
-    permission_classes = [
-        framework_permissions.IsAuthenticated 
-    ]
+#     permission_classes = [
+#         framework_permissions.IsAuthenticated 
+#     ]
 
-    def get(self, request, *args, **kwargs):
-        pass
-
-
-class GlobusInitUploadView(APIView):
-
-    permission_classes = [
-        framework_permissions.IsAuthenticated 
-    ]
-
-    def get(self, request, *args, **kwargs):
-        pass
+#     def get(self, request, *args, **kwargs):
+#         pass
 
 
-class GlobusAuthMixin(object):
+class GlobusInitiate(APIView):
+
+    def return_globus_browser_url(self, direction):
+        if direction == 'upload':
+            return Response({
+                'globus-browser-url': settings.GLOBUS_BROWSER_UPLOAD_URI
+            })
+        elif direction == 'download':
+            return Response({
+                'globus-browser-url': settings.GLOBUS_BROWSER_DOWNLOAD_URI
+            })  
+        else:
+            return Response(status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request, *args, **kwargs):
 
@@ -327,15 +338,8 @@ class GlobusAuthMixin(object):
             #     }
             # }
             create_or_update_token(request.user, rt)
+            return self.return_globus_browser_url(upload_or_download_state)   
 
-            if upload_or_download_state == 'upload':
-                return Response({
-                    'globus-browser-url': settings.GLOBUS_BROWSER_UPLOAD_URI
-                })
-            elif upload_or_download_state == 'download':
-                return Response({
-                    'globus-browser-url': settings.GLOBUS_BROWSER_DOWNLOAD_URI
-                })                
         else:
             logger.info('No "code" present in request params')
             # no 'code'. This means we are not receiving a 'callback' from globus auth.
@@ -345,86 +349,34 @@ class GlobusAuthMixin(object):
                 request.user, existence_required=False)
 
             if existing_globus_tokens:
-
-            else:
-                additional_authorize_params = {}
-                additional_authorize_params['state'] = random_string()
-                if request.query_params.get('signup'):
-                    additional_authorize_params['signup'] = 1
-                auth_uri = client.oauth2_get_authorize_url(
-                    query_params=additional_authorize_params)
-                return Response({
-                    'globus_auth_uri': auth_uri
-                })
-  
-
-
-
-            db_tokens = GlobusTokens.objects.filter(user=request.user)
-            if len(db_tokens) == 1:
-                print('single token found.')
-                current_user_token = json.loads(db_tokens[0].token_text)
-                auth_tokens = current_user_token['auth.globus.org']
-
-                # this user has a single existing token. Need to check that it's valid to use
-                print('about to check token...')
-                valid_token = self.check_token(request.user, client, auth_tokens)
-
-                if valid_token:
-                    if upload_or_download_state == 'upload':
-                        return Response({
-                            'globus-browser-url': settings.GLOBUS_BROWSER_UPLOAD_URI
-                        })
-                    elif upload_or_download_state == 'download':
-                        return Response({
-                            'globus-browser-url': settings.GLOBUS_BROWSER_DOWNLOAD_URI
-                        })  
+                has_recent_globus_session = check_globus_tokens(request.user)
+                if has_recent_globus_session:
+                    return self.return_globus_browser_url(upload_or_download_state)   
                 else:
-                    print('was not a valid token. Go get updated token info')
-                    auth_tokens = self.get_auth_token(request.user)
-                    print('updated auth_tokens:', auth_tokens)
-                    # token is no longer valid- force a reauth
-                    token_data = client.oauth2_token_introspect(
-                        auth_tokens['access_token'], 
-                        include='session_info')
-                    print('Back here, token_data:\n', token_data)
+                    globus_user_uuid = get_globus_uuid(request.user)
                     additional_authorize_params = {}
                     additional_authorize_params['state'] = random_string()
-                    additional_authorize_params['session_required_identities'] = token_data.data['sub']
+                    additional_authorize_params['session_required_identities'] = globus_user_uuid
                     additional_authorize_params['prompt'] = 'login'
-                    additional_authorize_params['direction'] = upload_or_download_state
+                    additional_authorize_params['session_message'] = SESSION_MESSAGE
                     auth_uri = client.oauth2_get_authorize_url(
                         query_params=additional_authorize_params)
-                    print('return auth_uri=', auth_uri)
                     return Response({
-                        'globus_auth_uri': auth_uri
+                        'globus-auth-url': auth_uri
                     })
-            elif len(db_tokens) == 0:
+            else:
+                # existing_globus_tokens was None, so we need to
+                # initiate the start of the oauth2 flow.
                 additional_authorize_params = {}
                 additional_authorize_params['state'] = random_string()
                 if request.query_params.get('signup'):
                     additional_authorize_params['signup'] = 1
-                additional_authorize_params['direction'] = upload_or_download_state
                 auth_uri = client.oauth2_get_authorize_url(
                     query_params=additional_authorize_params)
                 return Response({
-                    'globus_auth_uri': auth_uri
+                    'globus-auth-url': auth_uri
                 })
 
-            else:
-                # user has > 1 tokens. That's a problem. Can later encode this into the 
-                # db as a constraint
-                return Response(
-                    {'tokens': '!!!'}, 
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-
-
-#######
-
-            #data.data['session_info']['authentications']['37c82bcd-6824-4816-82e3-203087d7ad30']['auth_time']
-
-           
 
 class InfoView(APIView):
     permission_classes = [

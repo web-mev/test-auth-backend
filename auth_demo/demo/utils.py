@@ -47,7 +47,7 @@ def create_token(user, token_dict):
 
 def create_or_update_token(user, token_dict):
     try:
-        update_tokens_in_db(user, updated_tokens)
+        update_tokens_in_db(user, token_dict)
     except NonexistentGlobusTokenException:
         create_token(user, token_dict)
         
@@ -100,7 +100,7 @@ def get_globus_tokens(user, key=None):
 
     if key is None:
         return tokens
-    elif key in token:
+    elif key in tokens:
         return tokens[key]
     else:
         Exception('Unknown key.')
@@ -112,20 +112,11 @@ def get_globus_uuid(user):
     '''
     auth_tokens = get_globus_tokens(user, key='auth.globus.org')
     client = get_globus_client()
-
-    # create an authorizer for the user's tokens which grant
-    # us the ability to check their user info. We need the user's
-    # Globus identifier
-    auth_rt_authorizer = globus_sdk.RefreshTokenAuthorizer(
-        auth_tokens['refresh_token'], 
-        client,
-        access_token=auth_tokens['access_token'],
-        expires_at = auth_tokens['expires_at_seconds']
-    )
-    ac = globus_sdk.AuthClient(authorizer=auth_rt_authorizer)
-    user_info = ac.oauth2_userinfo()
-    user_info = json.loads(user_info.text)
-    return user_info['sub']
+    introspection_response = client.oauth2_token_introspect(
+        auth_tokens['access_token'], 
+        include='session_info')
+    data = introspection_response.data
+    return data['sub']
 
 def create_application_transfer_client():
     '''
@@ -214,7 +205,7 @@ def session_is_recent(client, auth_token):
     (False)
     '''
     logger.info('Check for sessions with: {j}'.format(
-        j=json.dumps(updated_tokens, indent=2)))
+        j=json.dumps(auth_token, indent=2)))
 
     introspection_data = client.oauth2_token_introspect(
         auth_token['access_token'], 
@@ -228,7 +219,7 @@ def session_is_recent(client, auth_token):
         auth_time = authentications_dict[user_id]['auth_time'] # in seconds since epoch
         time_delta = (time.time() - auth_time)/60 + 5 # how many minutes have passed PLUS some buffer
         logger.info('Time delta was: {x}'.format(x=time_delta))
-        if time_delta > REAUTHENTICATION_WINDOW_IN_MINUTES:
+        if time_delta > settings.GLOBUS_REAUTHENTICATION_WINDOW_IN_MINUTES:
             logger.info('Most recent session was too old')
             return False
         logger.info('Most recent session was within the limit.')
@@ -284,9 +275,5 @@ def check_globus_tokens(user):
     # At this point we have an active token. However, we still need to 
     # ensure we have a recent session. The high-assurance storage on S3
     # requires a relatively recent session authentication.
-    has_recent_session = session_is_recent(client, updated_tokens['auth.globus.org'])
-
-    if has_recent_session:
-        return True
-    return False
+    return session_is_recent(client, updated_tokens['auth.globus.org'])
 

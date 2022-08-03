@@ -16,7 +16,8 @@ urlpatterns = [
 
     # Returns info about available files. Protected view.
     path('resources/', views.ListFilesView.as_view(), name='file-page'),
-    path('resources/download/', views.DownloadFilesView.as_view(), name='download-file-page'),
+
+    #path('resources/download/', views.DownloadFilesView.as_view(), name='download-file-page'),
 
     # This returns a url for the auth redirect
     path('auth/<str:backend>/', views.construct_auth_url),
@@ -25,9 +26,9 @@ urlpatterns = [
     path('login/', include('rest_social_auth.urls_jwt_pair')),
 
     # For globus 
-    path('globus/initiate/', views.GlobusView.as_view()),
-    path('globus/transfer/', views.GlobusTransfer.as_view()),
-    path('globus/download/', views.GlobusDownloadView.as_view())
+    path('globus/initiate/', views.GlobusInitiate.as_view()),
+    path('globus/transfer/upload/', views.GlobusUploadView.as_view()),
+    path('globus/transfer/download/', views.GlobusDownloadView.as_view())
 
 ]
 
