@@ -23,6 +23,8 @@ import globus_sdk
 import boto3
 
 from .models import GlobusTokens, Resource
+from .utils import random_string, \
+    get_globus_client
 
 REAUTHENTICATION_WINDOW_IN_MINUTES = 60
 
@@ -72,6 +74,8 @@ class GlobusInitView(APIView):
     def get(self, request, *args, **kwargs):
 
         transfer_direction = request.query_params.get('direction')
+
+        
 
 
 
@@ -286,88 +290,9 @@ class GlobusInitUploadView(APIView):
 
 class GlobusAuthMixin(object):
 
-    def save_token(self, user, token_json):
-        gt = GlobusTokens.objects.create(
-            user = user,
-            token_text = token_json
-        )
-
-    def delete_current_token(self, user):
-        gt = GlobusTokens.objects.filter(user=user)
-        if len(gt) == 1:
-            gt[0].delete()
-        else:
-            raise Exception('Expected only a single token')
-
-    def get_auth_token(self, user):
-        db_tokens = GlobusTokens.objects.filter(user=user)
-        current_user_token = json.loads(db_tokens[0].token_text)
-        return current_user_token['auth.globus.org']
-
-    def check_token(self, user, client, auth_tokens):
-
-        # first check for an active token. Once that's active, we might STILL
-        # need to require reauthentication
-        print('validate token with:\n', json.dumps(auth_tokens, indent=2))
-        active_token = client.oauth2_validate_token(auth_tokens['access_token'])
-        print(active_token)
-        if not active_token.data['active']:
-            print('token was not active')
-            token_response = client.oauth2_refresh_token(auth_tokens['refresh_token'])
-            updated_token_dict = token_response.by_resource_server
-            auth_tokens = updated_token_dict['auth.globus.org']
-            token_json = json.dumps(updated_token_dict)
-            self.delete_current_token(user)
-            self.save_token(user, token_json)
-            print('done and saved updated token')
-        else:
-            print('was ACTIVE')
-
-        # now check if we need to re-auth
-        print('Check for re-auth with:\n', json.dumps(auth_tokens, indent=2))
-
-        token_data = client.oauth2_token_introspect(
-            auth_tokens['access_token'], 
-            include='session_info')
-        print('Token data from introspect:\n', token_data)
-
-        user_id = token_data.data['sub']
-        authentications_dict = token_data.data['session_info']['authentications']
-        if user_id in authentications_dict:
-            print('Found auths')
-            auth_time = authentications_dict[user_id]['auth_time'] # in seconds since epoch
-            time_delta = (time.time() - auth_time)/60 + 5 # how many minutes have passed PLUS some buffer
-            if time_delta > REAUTHENTICATION_WINDOW_IN_MINUTES:
-                print('auth was too old')
-                return False
-            print('auth time was ok...')
-            return True
-        print('no auths found')
-        return False
-
-    def my_introspect(self, client, rt, key):
-        token_data = client.oauth2_token_introspect(
-            rt[key]['access_token'], 
-            include='session_info')
-        print('In the "code" response block, token data (%s) from introspect:\n' % key, token_data)
-
-        user_id = token_data.data['sub']
-        authentications_dict = token_data.data['session_info']['authentications']
-        if user_id in authentications_dict:
-            print('In introspect, found auths')
-            auth_time = authentications_dict[user_id]['auth_time'] # in seconds since epoch
-            time_delta = (time.time() - auth_time)/60 + 5 # how many minutes have passed PLUS some buffer
-            if time_delta > REAUTHENTICATION_WINDOW_IN_MINUTES:
-                print('In introspect, auth was too old. Delta=', time_delta)
-            else:
-                print('In introspect, auth time was OK')
-
     def get(self, request, *args, **kwargs):
-        print('hi.')
-        client = globus_sdk.ConfidentialAppAuthClient(
-            settings.GLOBUS_CLIENT_ID,
-            settings.GLOBUS_CLIENT_SECRET
-        )
+
+        client = get_globus_client()
         client.oauth2_start_flow(
             settings.GLOBUS_AUTH_REDIRECT_URI,
             refresh_tokens=True,
@@ -379,7 +304,6 @@ class GlobusAuthMixin(object):
         if 'code' in request.query_params:
             # If here, returning from the Globus auth with a code
             code = request.query_params.get('code', '')
-            print('code is: ', code)
             tokens = client.oauth2_exchange_code_for_tokens(code)
             rt = tokens.by_resource_server
             # rt looks like (a native python dict):
@@ -402,21 +326,7 @@ class GlobusAuthMixin(object):
             #         'resource_server': 'transfer.api.globus.org'
             #     }
             # }
-            json_str = json.dumps(rt)
-            existing_db_tokens = GlobusTokens.objects.filter(user=request.user)
-
-            # in the case of this user having other, older Globus tokens, just delete them
-            if len(existing_db_tokens) > 0:
-                for t in existing_db_tokens:
-                    t.delete()
-            self.save_token(request.user, json_str)
-
-            ### Start temp code  #####
-            self.my_introspect(client, rt, 'auth.globus.org')
-            print('?'*200)
-            self.my_introspect(client, rt, 'transfer.api.globus.org')
-
-            ### End temp code  #####
+            create_or_update_token(request.user, rt)
 
             if upload_or_download_state == 'upload':
                 return Response({
@@ -427,8 +337,29 @@ class GlobusAuthMixin(object):
                     'globus-browser-url': settings.GLOBUS_BROWSER_DOWNLOAD_URI
                 })                
         else:
-            print('no code')
+            logger.info('No "code" present in request params')
             # no 'code'. This means we are not receiving a 'callback' from globus auth.
+
+            # this will be None if the current user does not have Globus tokens
+            existing_globus_tokens = get_globus_token_from_db(
+                request.user, existence_required=False)
+
+            if existing_globus_tokens:
+
+            else:
+                additional_authorize_params = {}
+                additional_authorize_params['state'] = random_string()
+                if request.query_params.get('signup'):
+                    additional_authorize_params['signup'] = 1
+                auth_uri = client.oauth2_get_authorize_url(
+                    query_params=additional_authorize_params)
+                return Response({
+                    'globus_auth_uri': auth_uri
+                })
+  
+
+
+
             db_tokens = GlobusTokens.objects.filter(user=request.user)
             if len(db_tokens) == 1:
                 print('single token found.')
