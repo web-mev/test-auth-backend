@@ -30,7 +30,8 @@ from .utils import random_string, \
     get_globus_uuid, \
     check_globus_tokens, \
     create_user_transfer_client, \
-    create_application_transfer_client
+    create_application_transfer_client, \
+    copy_to_tmp_location
 
 SESSION_MESSAGE = ('Since this is a high-assurance Globus collection, we'
     ' require a recent authentication. Please sign-in again.'
@@ -108,87 +109,93 @@ class GlobusDownloadView(APIView):
 
     def post(self, request, *args, **kwargs):
 
-        print('data=', request.data)
-        # pk = request.data['pk']
-        # r = Resource.objects.get(pk=pk)
-        # print(r)
+        logger.info('data={x}'.format(x=request.data))
+        requested_pks = [int(x) for x in request.data['pk_set']]
 
-        return Response({'transfer_id': 'abc123'})
-        # # copy the file to some other location.
-        # # For Globus to 'see' it, needs to be in the same folder
-        # # accessible by the collection
-        # data_location = os.path.join(
-        #     settings.S3_BUCKET_ROOT_DIR,
-        #     r.path
-        # )
-        # tmp_folder = 'tmp-{x}/'.format(x=uuid.uuid4())
-        # # where the data will go TO, relative to the bucket
-        # tmp_data_location = os.path.join(
-        #     settings.S3_BUCKET_ROOT_DIR,
-        #     tmp_folder,
-        #     os.path.basename(r.path)
-        # )
-        # # boto copy...
-        # s3 = boto3.resource('s3')
-        # dest_obj = s3.Object(settings.S3_BUCKET, tmp_data_location)
-        # cp_src = {
-        #     'Bucket': settings.S3_BUCKET,
-        #     'Key': data_location
-        # }
-        # dest_obj.copy(cp_src)
+        # TODO: check if not exists, etc.
+        resources = Resource.objects.filter(pk__in=requested_pks)
 
-        # my_transfer_client, user_uuid = create_transfer_client(request.user)
+        label = request.data['label']
+        destination_endpoint_id = request.data['endpoint_id']
 
-        # # Create the rule and add it
-        # rule_data = {
-        #     "DATA_TYPE": "access",
-        #     "principal_type": "identity",
-        #     "principal": user_uuid,
-        #     "path": tmp_data_location,
-        #     "permissions": "rw", 
-        # }
-        # print('Rule data:\n', rule_data)
-        # result = my_transfer_client.add_endpoint_acl_rule(settings.GLOBUS_ENDPOINT_ID, rule_data)
-        # print('Added ACL. Result is:\n', result)
-        # # TODO: can save this to later remove the ACL
-        # rule_id = result['access_id']
+        # This `path` gives the root of the destination
+        dest_folder = request.data['path']
 
-        # # Now onto the business of initiating the transfer
-        # # TODO: get the endpoint based on where the user wants to put their files.
-        # destination_endpoint_id = params['endpoint_id']
-        # source_endpoint_id = settings.GLOBUS_ENDPOINT_ID
-        # print('Source endpoint:', source_endpoint_id)
-        # print('Destination endpoint:', destination_endpoint_id)
-        # transfer_data = globus_sdk.TransferData(transfer_client=user_transfer_client,
-        #                     source_endpoint=source_endpoint_id,
-        #                     destination_endpoint=destination_endpoint_id,
-        #                     label=params['label'])
+        # Depending on how the user selected the destination, we might get
+        # `folder[0]`. If so, the final destination is the combination of `path`
+        # `folder[0]`
+        if 'folder[0]' in request.data:
+            dest_folder = os.path.join(dest_folder, request.data['folder[0]'])
 
-        # source_path = os.path.join(
-        #     tmp_folder,
-        #     os.path.basename(r.path) 
-        # )
-        # # TODO: determine where the file will go based on user input
-        # destination_path = ...
-        # print('Add: {s} --> {d}'.format(
-        #     s = source_path,
-        #     d = destination_path
-        # ))
-        # transfer_data.add_item(
-        #     source_path = source_path,
-        #     destination_path = destination_path
-        # )
-        # user_transfer_client.endpoint_autoactivate(source_endpoint_id)
-        # user_transfer_client.endpoint_autoactivate(destination_endpoint_id)
-        # try:
-        #     task_id = user_transfer_client.submit_transfer(transfer_data)['task_id']
-        # except globus_sdk.GlobusAPIError as ex:
-        #     authz_params = ex.info.authorization_parameters
-        #     if not authz_params:
-        #         raise
-        #     print("got authz params:", authz_params)
-        # print(task_id)
-        # return Response({'transfer_id': task_id})
+        # a temporary 'outbox' where we will place the files we 
+        # are transferring. This way Globus can see them. This 
+        # path is relative to the folder where the Globus
+        # collection is based.
+        # In a more general application, this would be a copy from the 
+        # MeV bucket into the Globus-associated bucket
+        tmp_folder = 'tmp-{x}/'.format(x=uuid.uuid4())
+
+        # copy the files from our MeV storage into the Globus-associated
+        # bucket/collection. Get a list of those since those are the 
+        # source of our transfer.
+        final_paths = []
+        for r in resources:
+            final_paths.append(copy_to_tmp_location(r, tmp_folder))
+
+        app_transfer_client = create_application_transfer_client()
+        user_transfer_client = create_user_transfer_client(request.user)
+        user_uuid = get_globus_uuid(request.user)
+
+        # Create an ACL which allows Globus to look into that temporary 'outbox'
+        rule_data = {
+            "DATA_TYPE": "access",
+            "principal_type": "identity",
+            "principal": user_uuid,
+            "path": '/' + tmp_folder, # needs to be 'rooted'
+            "permissions": "r", 
+        }
+
+        logger.info('Rule data:\n{data}'.format(data=rule_data))
+        result = app_transfer_client.add_endpoint_acl_rule(settings.GLOBUS_ENDPOINT_ID, rule_data)
+        logger.info('Added ACL. Result is:\n{r}'.format(r=result))
+
+        # TODO: can save this to later remove the ACL
+        rule_id = result['access_id']
+
+        # Given that we are transferring AWAY from our application, 
+        # the source is our Globus endpoint (the shared collection)
+        source_endpoint_id = settings.GLOBUS_ENDPOINT_ID
+
+        transfer_data = globus_sdk.TransferData(
+            transfer_client=user_transfer_client,
+            source_endpoint=source_endpoint_id,
+            destination_endpoint=destination_endpoint_id,
+            label=label)
+
+        for p in final_paths:
+            source_path = p
+            destination_path = os.path.join(dest_folder, os.path.basename(p))
+            logger.info('Download: {s} --> {d}'.format(
+                s = source_path,
+                d = destination_path
+            ))
+            transfer_data.add_item(
+                source_path = source_path,
+                destination_path = destination_path
+            )
+        
+        user_transfer_client.endpoint_autoactivate(source_endpoint_id)
+        user_transfer_client.endpoint_autoactivate(destination_endpoint_id)
+        try:
+            task_id = user_transfer_client.submit_transfer(transfer_data)['task_id']
+        except globus_sdk.GlobusAPIError as ex:
+            authz_params = ex.info.authorization_parameters
+            if not authz_params:
+                raise
+            logger.info("got authz params:", authz_params)
+
+        return Response({'transfer_id': task_id})
+
 
 class GlobusUploadView(APIView):
 
@@ -212,6 +219,8 @@ class GlobusUploadView(APIView):
         params = request.data['params']
 
         app_transfer_client = create_application_transfer_client()
+        user_transfer_client = create_user_transfer_client(request.user)
+
         user_uuid = get_globus_uuid(request.user)
         tmp_folder = '/tmp-{x}/'.format(x=uuid.uuid4())
 
@@ -236,7 +245,7 @@ class GlobusUploadView(APIView):
         logger.info('Source endpoint: {e}'.format(e=source_endpoint_id))
         logger.info('Destination endpoint: {e}'.format(e=destination_endpoint_id))
         transfer_data = globus_sdk.TransferData(
-            transfer_client=app_transfer_client,
+            transfer_client=user_transfer_client,
             source_endpoint=source_endpoint_id,
             destination_endpoint=destination_endpoint_id,
             label=params['label'])
@@ -264,7 +273,6 @@ class GlobusUploadView(APIView):
             #     owner = request.user,
             #     name = os.path.basename(source_path)
             # )
-        user_transfer_client = create_user_transfer_client(request.user)
         user_transfer_client.endpoint_autoactivate(source_endpoint_id)
         user_transfer_client.endpoint_autoactivate(destination_endpoint_id)
         try:
@@ -276,16 +284,7 @@ class GlobusUploadView(APIView):
             logger.info("got authz params:", authz_params)
 
         return Response({'transfer_id': task_id})
-        
-# class GlobusInitDownloadView(APIView):
-
-#     permission_classes = [
-#         framework_permissions.IsAuthenticated 
-#     ]
-
-#     def get(self, request, *args, **kwargs):
-#         pass
-
+    
 
 class GlobusInitiate(APIView):
 
@@ -337,6 +336,7 @@ class GlobusInitiate(APIView):
             #         'resource_server': 'transfer.api.globus.org'
             #     }
             # }
+            logger.info('Returning from code/token exchane with:\n{x}'.format(x=json.dumps(rt, indent=2)))
             create_or_update_token(request.user, rt)
             return self.return_globus_browser_url(upload_or_download_state)   
 
@@ -351,8 +351,10 @@ class GlobusInitiate(APIView):
             if existing_globus_tokens:
                 has_recent_globus_session = check_globus_tokens(request.user)
                 if has_recent_globus_session:
+                    logger.info('Had recent globus token/session. Go to Globus file browser')
                     return self.return_globus_browser_url(upload_or_download_state)   
                 else:
+                    logger.info('Did not have a recent authentication/session. Send to Globus auth.')
                     globus_user_uuid = get_globus_uuid(request.user)
                     additional_authorize_params = {}
                     additional_authorize_params['state'] = random_string()

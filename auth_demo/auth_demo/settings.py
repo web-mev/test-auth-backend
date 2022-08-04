@@ -172,6 +172,24 @@ SOCIAL_AUTH_GOOGLE_OAUTH2_PIPELINE = (
     'demo.pipeline_components.save_picture'
 )
 
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': '/var/log/demo/auth.log',
+        },
+    },
+    'loggers': {
+        '': {
+            'handlers': ['file'],
+            'level': 'INFO'
+        },
+    },
+}
+
 SOCIAL_AUTH_STRATEGY = 'demo.strategy.XYZStrategy'
 
 # sets the proper redirect URL (e.g. localhost:4200/redirect/)

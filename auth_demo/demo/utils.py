@@ -2,8 +2,10 @@ import logging
 import json
 import random
 import time
+import os
 
 import globus_sdk
+import boto3
 
 from django.conf import settings
 
@@ -46,9 +48,15 @@ def create_token(user, token_dict):
     )
 
 def create_or_update_token(user, token_dict):
+    logger.info('Create or update token for user {u} with token info: {x}'.format(
+        u = user.email,
+        x = json.dumps(token_dict, indent=2)
+    ))
     try:
+        logger.info('Try to update the token')
         update_tokens_in_db(user, token_dict)
     except NonexistentGlobusTokenException:
+        logger.info('Token did not exist. Create a new one.')
         create_token(user, token_dict)
         
 
@@ -112,11 +120,8 @@ def get_globus_uuid(user):
     '''
     auth_tokens = get_globus_tokens(user, key='auth.globus.org')
     client = get_globus_client()
-    introspection_response = client.oauth2_token_introspect(
-        auth_tokens['access_token'], 
-        include='session_info')
-    data = introspection_response.data
-    return data['sub']
+    introspection_data = perform_token_introspection(client, auth_tokens)
+    return introspection_data['sub']
 
 def create_application_transfer_client():
     '''
@@ -134,9 +139,14 @@ def create_user_transfer_client(user):
     '''
     Given a WebMeV user, create/return a globus_sdk.TransferClient
     '''
+    logger.info('Create a TransferClient for the user.')
+
     transfer_tokens = get_globus_tokens(user, 'transfer.api.globus.org')
 
     client = get_globus_client()
+
+    # just so we get the log to see what this token looks like:
+    _ = perform_token_introspection(client, transfer_tokens)
 
     # create another authorizer using the tokens for the transfer API
     transfer_rt_authorizer = globus_sdk.RefreshTokenAuthorizer(
@@ -192,10 +202,19 @@ def update_tokens_in_db(user, updated_tokens):
     '''
     Updates the tokens for this user. 
     '''
+    logger.info('Update the token for user {u}'.format(u=user.email))
     gt = get_globus_token_from_db(user)
     tokens_as_json = json.dumps(updated_tokens)
     gt.token_text = tokens_as_json
     gt.save()
+
+def perform_token_introspection(client, token):
+    introspection_data = client.oauth2_token_introspect(
+    token['access_token'], 
+    include='session_info')
+    logger.info('Token data from introspect:\n{x}'.format(
+        x=json.dumps(introspection_data.data, indent=2)))
+    return introspection_data.data
 
 def session_is_recent(client, auth_token):
     '''
@@ -207,13 +226,10 @@ def session_is_recent(client, auth_token):
     logger.info('Check for sessions with: {j}'.format(
         j=json.dumps(auth_token, indent=2)))
 
-    introspection_data = client.oauth2_token_introspect(
-        auth_token['access_token'], 
-        include='session_info')
-    logger.info('Token data from introspect:\n', introspection_data)
+    introspection_data = perform_token_introspection(client, auth_token)
 
-    user_id = introspection_data.data['sub']
-    authentications_dict = introspection_data.data['session_info']['authentications']
+    user_id = introspection_data['sub']
+    authentications_dict = introspection_data['session_info']['authentications']
     logger.info('Authentications:\n{x}'.format(x=json.dumps(authentications_dict, indent=2)))
     if user_id in authentications_dict:
         auth_time = authentications_dict[user_id]['auth_time'] # in seconds since epoch
@@ -277,3 +293,31 @@ def check_globus_tokens(user):
     # requires a relatively recent session authentication.
     return session_is_recent(client, updated_tokens['auth.globus.org'])
 
+def copy_to_tmp_location(resource, tmp_folder):
+
+    # copy the file to some other location.
+    # For Globus to 'see' it, needs to be in the same folder
+    # accessible by the collection
+    data_location = os.path.join(
+        settings.S3_BUCKET_ROOT_DIR,
+        resource.path
+    )
+    # where the data will go TO, relative to the bucket
+    tmp_data_location = os.path.join(
+        settings.S3_BUCKET_ROOT_DIR,
+        tmp_folder,
+        os.path.basename(resource.path)
+    )
+    logger.info('Copy from {s} to {d}'.format(
+        s = data_location,
+        d = tmp_data_location
+    ))
+    # boto copy...
+    s3 = boto3.resource('s3')
+    dest_obj = s3.Object(settings.S3_BUCKET, tmp_data_location)
+    cp_src = {
+        'Bucket': settings.S3_BUCKET,
+        'Key': data_location
+    }
+    dest_obj.copy(cp_src)
+    return tmp_data_location
