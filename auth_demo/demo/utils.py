@@ -307,10 +307,7 @@ def copy_to_tmp_location(resource, tmp_folder):
     # copy the file to some other location.
     # For Globus to 'see' it, needs to be in the same folder
     # accessible by the collection
-    data_location = os.path.join(
-        settings.S3_BUCKET_ROOT_DIR,
-        resource.path
-    )
+    data_location = resource.path
 
     # where the data will go TO, relative to the bucket.
     data_location_relative_to_share = os.path.join(
@@ -318,7 +315,7 @@ def copy_to_tmp_location(resource, tmp_folder):
         os.path.basename(resource.path)
     )
     tmp_data_location = os.path.join(
-        settings.S3_BUCKET_ROOT_DIR,
+        settings.GCS_S3_BUCKET_ROOT_DIR,
         data_location_relative_to_share
     )
     logger.info('Copy from {s} to {d}'.format(
@@ -327,10 +324,45 @@ def copy_to_tmp_location(resource, tmp_folder):
     ))
     # boto copy...
     s3 = boto3.resource('s3')
-    dest_obj = s3.Object(settings.S3_BUCKET, tmp_data_location)
+    dest_obj = s3.Object(settings.GCS_S3_BUCKET, tmp_data_location)
     cp_src = {
-        'Bucket': settings.S3_BUCKET,
+        'Bucket': settings.APP_S3_BUCKET,
         'Key': data_location
     }
     dest_obj.copy(cp_src)
     return data_location_relative_to_share
+
+def copy_to_final_storage(user, globus_dest_path):
+    '''
+    Copy from where Globus drops the file, e.g.
+    /tmp-2eacb55b-d3ef-4be4-8970-5fe78fa50ef9/foo.tsv
+    to our app's final storage.
+
+    Note that the path received is "rooted", even 
+    though it's technically in a subfolder of a bucket
+
+    Return the path relative to our app's storage bucket
+    '''
+    actual_globus_path_relative_to_bucket = os.path.join(
+        settings.GCS_S3_BUCKET_ROOT_DIR,
+        globus_dest_path[1:] # remove the leading slash
+    )
+    user_id = str(user.pk)
+    dest_path = os.path.join(
+        user_id,
+        os.path.basename(globus_dest_path)
+    )
+    s3 = boto3.resource('s3')
+    dest_obj = s3.Object(
+        settings.APP_S3_BUCKET,
+        dest_path
+    )
+    logger.info(dest_obj)
+    cp_src = {
+        'Bucket': settings.GCS_S3_BUCKET,
+        'Key': actual_globus_path_relative_to_bucket
+    }
+    logger.info('Copy: {x}'.format(x=cp_src))
+    dest_obj.copy(cp_src)
+    return dest_path
+    

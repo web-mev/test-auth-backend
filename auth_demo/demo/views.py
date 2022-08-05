@@ -31,7 +31,8 @@ from .utils import random_string, \
     check_globus_tokens, \
     create_user_transfer_client, \
     create_application_transfer_client, \
-    copy_to_tmp_location
+    copy_to_tmp_location, \
+    copy_to_final_storage
 
 SESSION_MESSAGE = ('Since this is a high-assurance Globus collection, we'
     ' require a recent authentication. Please sign-in again.'
@@ -70,36 +71,6 @@ class ListFilesView(APIView):
             response.append(x)
         return Response(response)
 
-
-# class GlobusInitView(APIView):
-#     '''
-#     A common view for intitiating either up or downloads via Globus
-#     '''
-
-#     permission_classes = [
-#         framework_permissions.IsAuthenticated 
-#     ]    
-    
-#     def get(self, request, *args, **kwargs):
-
-#         transfer_direction = request.query_params.get('direction')
-
-# class DownloadFilesView(APIView):
-
-#     permission_classes = [
-#         framework_permissions.IsAuthenticated 
-#     ]    
-    
-#     def post(self, request, *args, **kwargs):
-#         print('data=', request.data)
-#         pk = request.data['pk']
-#         r = Resource.objects.get(pk=pk)
-#         print(r)
-
-#         url = settings.GLOBUS_BROWSER_DOWNLOAD_URI + '&ep=' + pk
-#         return Response(
-#             {'globus-browser-url': url}
-#         )
 
 class GlobusDownloadView(APIView):
 
@@ -268,11 +239,12 @@ class GlobusUploadView(APIView):
                 source_path = source_path,
                 destination_path = destination_path
             )
-            # r = Resource.objects.create(
-            #     path = destination_path,
-            #     owner = request.user,
-            #     name = os.path.basename(source_path)
-            # )
+
+            # add the Resource now. Since this is a dummy application,
+            # it's OK that the files won't actually be there for a bit of time.
+            # In a general application, however, we need to confirm successful
+            # transfers before adding files to our database.
+
         user_transfer_client.endpoint_autoactivate(source_endpoint_id)
         user_transfer_client.endpoint_autoactivate(destination_endpoint_id)
         try:
@@ -283,6 +255,22 @@ class GlobusUploadView(APIView):
                 raise
             logger.info("got authz params:", authz_params)
 
+        # wait until the task is done
+        done = user_transfer_client.task_wait(task_id, timeout=600, polling_interval=10)
+        if not done:
+            logger.info('Did not complete.')
+            return Response({}, status=500)
+        else:
+            logger.info('Transfer completed. Get info.')
+            for info in user_transfer_client.task_successful_transfers(task_id):
+                globus_destination_path = info['destination_path']
+                logger.info('Destination on complete: {x}'.format(x=destination_path))
+                path_in_app_storage = copy_to_final_storage(request.user, globus_destination_path)
+                r = Resource.objects.create(
+                    path = path_in_app_storage,
+                    owner = request.user,
+                    name = os.path.basename(path_in_app_storage)
+                )
         return Response({'transfer_id': task_id})
     
 

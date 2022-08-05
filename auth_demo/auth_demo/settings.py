@@ -236,5 +236,13 @@ GLOBUS_SCOPES = (
 GLOBUS_ENDPOINT_ID=os.environ['GLOBUS_ENDPOINT_ID']
 GLOBUS_REAUTHENTICATION_WINDOW_IN_MINUTES = 60
 
-S3_BUCKET = os.environ['S3_BUCKET']
-S3_BUCKET_ROOT_DIR = os.environ['S3_BUCKET_ROOT_DIR']
+# this is where the application stores files. Globus
+# does NOT have access to this bucket at all.
+APP_S3_BUCKET = os.environ['APP_S3_BUCKET']
+
+# This is the bucket where Globus has access
+GCS_S3_BUCKET = os.environ['GCS_S3_BUCKET']
+
+# This is the folder where we have created the shared collection.
+# Globus is able to write into this folder.
+GCS_S3_BUCKET_ROOT_DIR = os.environ['GCS_S3_BUCKET_ROOT_DIR']
