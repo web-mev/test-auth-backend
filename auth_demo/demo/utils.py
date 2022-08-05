@@ -294,6 +294,15 @@ def check_globus_tokens(user):
     return session_is_recent(client, updated_tokens['auth.globus.org'])
 
 def copy_to_tmp_location(resource, tmp_folder):
+    '''
+    Copies the data from OUR app storage to a location
+    that is accessible by the Globus share. 
+
+    Returns the path to the copied file. Note that the path
+    is RELATIVE to the share. e.g. if the share folder is s3://<bucket>/foo
+    and the file is copied to s3://<bucket>/foo/tmp-x/bar.tsv, then
+    we return /tmp-bar/bar.tsv
+    '''
 
     # copy the file to some other location.
     # For Globus to 'see' it, needs to be in the same folder
@@ -302,11 +311,15 @@ def copy_to_tmp_location(resource, tmp_folder):
         settings.S3_BUCKET_ROOT_DIR,
         resource.path
     )
-    # where the data will go TO, relative to the bucket
-    tmp_data_location = os.path.join(
-        settings.S3_BUCKET_ROOT_DIR,
+
+    # where the data will go TO, relative to the bucket.
+    data_location_relative_to_share = os.path.join(
         tmp_folder,
         os.path.basename(resource.path)
+    )
+    tmp_data_location = os.path.join(
+        settings.S3_BUCKET_ROOT_DIR,
+        data_location_relative_to_share
     )
     logger.info('Copy from {s} to {d}'.format(
         s = data_location,
@@ -320,4 +333,4 @@ def copy_to_tmp_location(resource, tmp_folder):
         'Key': data_location
     }
     dest_obj.copy(cp_src)
-    return tmp_data_location
+    return data_location_relative_to_share
